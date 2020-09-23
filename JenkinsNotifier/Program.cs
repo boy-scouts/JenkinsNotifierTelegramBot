@@ -1,13 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Threading.Tasks;
 using JenkinsNET.Models;
 using Newtonsoft.Json;
 using Telegram.Bot;
 using Telegram.Bot.Args;
-using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using File = System.IO.File;
@@ -21,7 +19,7 @@ namespace JenkinsNotifier
         private static JobsHandler _jobsHandler;
         private static ITelegramBotClient _botClient;
         
-        private static Dictionary<long, List<ProgressiveChatMessage>> ChatMessages = new Dictionary<long, List<ProgressiveChatMessage>>();
+        private static Dictionary<long, List<ProgressiveChatMessage>> _chatMessages = new Dictionary<long, List<ProgressiveChatMessage>>();
 
         // ReSharper disable once UnusedParameter.Local
         static void Main(string[] args)
@@ -51,14 +49,14 @@ namespace JenkinsNotifier
 
         private static void SaveState()
         {
-            File.WriteAllText(StateFile, JsonConvert.SerializeObject(ChatMessages, Formatting.Indented));
+            File.WriteAllText(StateFile, JsonConvert.SerializeObject(_chatMessages, Formatting.Indented));
         }
 
         private static void LoadState()
         {
             if (File.Exists(StateFile))
             {
-                ChatMessages =
+                _chatMessages =
                     JsonConvert.DeserializeObject<Dictionary<long, List<ProgressiveChatMessage>>>(
                         File.ReadAllText(StateFile));
             }
@@ -71,31 +69,31 @@ namespace JenkinsNotifier
 
         private static async void UpdateMessages()
         {
-            List<long> chatIds = ChatMessages.Keys.ToList();
+            List<long> chatIds = _chatMessages.Keys.ToList();
 
             foreach (var chatId in chatIds)
             {
-                for (var cm = 0; cm < ChatMessages[chatId].Count; cm++)
+                for (var cm = 0; cm < _chatMessages[chatId].Count; cm++)
                 {
-                    var message = ChatMessages[chatId][cm];
-                    if (message.completed) return;
-
-                    Logger.Log($"Updating not completed message {message.messageId}");
-
-                    var build = _jobsHandler.GetBuildDescription(message.jobName, message.buildNumber);
+                    var message = _chatMessages[chatId][cm];
+                    if (message.Completed) continue;
+                    
+                    var build = _jobsHandler.GetBuildDescription(message.JobName, message.BuildNumber);
                     
                     switch (build.Building)
                     {
-                        case false when message.completed:
+                        case false when message.Completed:
                             continue;
-                        case false when !message.completed:
-                            message.completed = true;
+                        case false when !message.Completed:
+                            message.Completed = true;
+                            await _botClient.SendTextMessageAsync(chatId, message.ToCompletedMessageString(build),
+                                ParseMode.Markdown);
                             break;
                     }
 
                     try
                     {
-                        await _botClient.EditMessageTextAsync(chatId, message.messageId, message.ToMessageString(build),
+                        await _botClient.EditMessageTextAsync(chatId, message.MessageId, message.ToMessageString(build),
                             ParseMode.Markdown, replyMarkup: message.GetKeyboard(build));
                     }
                     catch (Telegram.Bot.Exceptions.MessageIsNotModifiedException)
@@ -180,9 +178,9 @@ namespace JenkinsNotifier
 
             Logger.Log($"Received a {msg.Type} {msg.Text} message from {msg.From.ToUserString()}");
 
-            if (!ChatMessages.ContainsKey(chatId))
+            if (!_chatMessages.ContainsKey(chatId))
             {
-                ChatMessages.Add(chatId, new List<ProgressiveChatMessage>());
+                _chatMessages.Add(chatId, new List<ProgressiveChatMessage>());
             }
 
             await Reply("Hello there");
@@ -192,17 +190,17 @@ namespace JenkinsNotifier
         {
             Logger.Log($"Build {build.Number} started in job {jobName}");
 
-            foreach (var chatMessage in ChatMessages)
+            foreach (var chatMessage in _chatMessages)
             {
-                var progressiveMessage = new ProgressiveChatMessage {jobName = jobName, buildNumber = build.Number};
+                var progressiveMessage = new ProgressiveChatMessage {JobName = jobName, BuildNumber = build.Number};
 
                 var chatId = chatMessage.Key;
                 var message = await _botClient.SendTextMessageAsync(chatId, progressiveMessage.ToMessageString(build),
                     ParseMode.Markdown, replyMarkup: progressiveMessage.GetKeyboard(build));
 
-                progressiveMessage.chatId = message.Chat.Id;
-                progressiveMessage.messageId = message.MessageId;
-                ChatMessages[chatId].Add(progressiveMessage);
+                progressiveMessage.ChatId = message.Chat.Id;
+                progressiveMessage.MessageId = message.MessageId;
+                _chatMessages[chatId].Add(progressiveMessage);
 
                 Logger.Log($"Added progressive message to {chatId}");
             }
@@ -213,49 +211,66 @@ namespace JenkinsNotifier
 
     public class ProgressiveChatMessage
     {
-        public long chatId;
-        public int messageId;
-        public string jobName;
-        public int? buildNumber;
-        public bool completed;
+        public long ChatId;
+        public int MessageId;
+        public string JobName;
+        public int? BuildNumber;
+        public bool Completed;
 
         public TimeSpan GetDuration(JenkinsBuildBase build)
         {
-            var diff = DateTime.Now - build.TimeStamp.Value.FromUnixTimestampMs().ToLocalTime();
-            return diff;
+            if (build.TimeStamp != null)
+            {
+                var diff = DateTime.Now - build.TimeStamp.Value.FromUnixTimestampMs().ToLocalTime();
+                return diff;
+            }
+            
+            Logger.Log(build.TimeStamp);
+
+            return TimeSpan.Zero;
         }
         
         public string ToMessageString(JenkinsBuildBase build)
         {
+            if (build == null) return "Wtf";
+            
             string progressBar = "Not available";
 
             var duration = GetDuration(build).TotalMilliseconds;
-            if (build?.EstimatedDuration != null)
+            if (build.EstimatedDuration != null)
             {
-                const int BarLength = 15;
+                const int barLength = 15;
                 progressBar = "";
 
-                for (int i = 0; i < BarLength; i++)
+                for (int i = 0; i < barLength; i++)
                 {
                     double? bt = duration / (double) build.EstimatedDuration;
-                    float t = i / (float) BarLength;
+                    float t = i / (float) barLength;
                     progressBar += t < bt ? "▓" : "░";
                 }
             }
 
-            var status = build?.Building != null 
+            var status = build.Building != null 
                                 ? build.Building.Value 
                                     ? "Building" 
                                     : "Not building" 
                                 : "Not available";
 
-            return $"*{jobName} #{build.Number}*\n" +
+
+            var buildNumber = build.Number ?? -1;
+            var timestamp = build.TimeStamp ?? 0;
+            return $"*{JobName} #{buildNumber}*\n" +
                    $"_Status_: {status}\n" +
-                   $"_Build started at_: {build.TimeStamp.Value.FromUnixTimestampMs().ToLocalTime():G}\n" +
+                   $"_Build started at_: {timestamp.FromUnixTimestampMs().ToLocalTime():G}\n" +
                    $"_Duration_: ~{GetDuration(build).ToHumanReadable()}\n" +
                    $"_Estimated build time_: ~{build.EstimatedDuration.ToTimespan().ToHumanReadable()}\n" +
                    $"_Progress:_ {progressBar}\n" +
                    $"\n_Updated at:_ {DateTime.Now:G}\n";
+        }
+
+        public string ToCompletedMessageString(JenkinsBuildBase jenkinsBuildBase)
+        {
+            return $"{JobName} #{BuildNumber} ZALETEL";
         }
         
         public InlineKeyboardMarkup GetKeyboard(JenkinsBuildBase build)
@@ -269,7 +284,7 @@ namespace JenkinsNotifier
                         new InlineKeyboardButton()
                         {
                             Text = $"Abort",
-                            CallbackData = $"abort:{jobName}:{build.Number}"
+                            CallbackData = $"abort:{JobName}:{build.Number}"
                         },
                     },
                 });

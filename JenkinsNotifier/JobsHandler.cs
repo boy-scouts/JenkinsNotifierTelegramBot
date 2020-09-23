@@ -12,7 +12,7 @@ namespace JenkinsNotifier
         public event Action<string, JenkinsBuildBase> OnNewBuildStarted = (jobName, build) => { };
         public event Action OnJobsChecked = () => { };
 
-        public bool Started { get; private set; }
+        private bool Started { get; set; }
         
         private Dictionary<string, List<int?>> _jobsBuilds;
         private readonly JenkinsClient _client;
@@ -44,7 +44,7 @@ namespace JenkinsNotifier
 
         public async void AbortBuild(string jobName, string buildNumber)
         {
-            
+            await Task.Delay(1);
         }
 
         public JenkinsBuildBase GetBuildDescription(string jobName, int? buildNumber)
