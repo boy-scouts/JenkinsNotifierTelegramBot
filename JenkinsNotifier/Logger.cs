@@ -5,12 +5,17 @@ namespace JenkinsNotifier
 {
     public static class Logger
     {
-        static string LogPath = "memebot.log";
+        static string LogPath = "bot.log";
 
         public static void Log(object o)
         {
             Console.WriteLine(o);
             AppendWithDateToFile(o);
+        }
+
+        public static void LogException(Exception e)
+        {
+            Log($"Exception occured: {e}");
         }
         
         public static void AppendWithDateToFile(object o)

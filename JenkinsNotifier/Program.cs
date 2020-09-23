@@ -1,49 +1,284 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using JenkinsNET;
+using System.Security.Cryptography;
+using System.Threading.Tasks;
 using JenkinsNET.Models;
+using Newtonsoft.Json;
+using Telegram.Bot;
+using Telegram.Bot.Args;
+using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
+using File = System.IO.File;
 
 namespace JenkinsNotifier
 {
-    class Program
+    static class Program
     {
+        private const string StateFile = "state.json";
+        
+        private static JobsHandler _jobsHandler;
+        private static ITelegramBotClient _botClient;
+        
+        private static Dictionary<long, List<ProgressiveChatMessage>> ChatMessages = new Dictionary<long, List<ProgressiveChatMessage>>();
+
+        // ReSharper disable once UnusedParameter.Local
         static void Main(string[] args)
         {
-            Console.WriteLine("Logging in..");
-            var client = new JenkinsClient {
-                BaseUrl = "http://192.168.0.252:8080/",
-                UserName = "admin",
-                ApiToken = "11aa6eb88577c4e8fd7a9b6a1b5c5ad279",
-            };
-            
-            Console.WriteLine(client.ApiToken);
+            Logger.Log("Starting..");
 
+            Config.Load();
+            LoadState();
+
+            _botClient = new TelegramBotClient(Config.Current.BotAccessToken);
+            _botClient.OnMessage += Bot_OnMessage;
+            _botClient.OnCallbackQuery += Bot_OnCallbackQuery;
+            _botClient.StartReceiving();
             
-            Console.WriteLine("Jobs:");
-            var jobs = client.Get().Jobs;
-            foreach (var job in jobs)
+            _jobsHandler = new JobsHandler(Config.Current.JenkinsBaseUrl, Config.Current.JenkinsUserName, Config.Current.JenkinsApiToken);
+            _jobsHandler.OnNewBuildStarted += JobsHandlerOnOnNewBuildStarted;
+            _jobsHandler.OnJobsChecked += JobsHandlerOnOnJobsChecked;
+            _jobsHandler.StartPolling();
+
+            Logger.Log("Started!");
+            
+            while (!CommandHandler.HandleCommand())
             {
-                Console.WriteLine(job.Name);
+                // Do nothing
+            }
+        }
+
+        private static void SaveState()
+        {
+            File.WriteAllText(StateFile, JsonConvert.SerializeObject(ChatMessages, Formatting.Indented));
+        }
+
+        private static void LoadState()
+        {
+            if (File.Exists(StateFile))
+            {
+                ChatMessages =
+                    JsonConvert.DeserializeObject<Dictionary<long, List<ProgressiveChatMessage>>>(
+                        File.ReadAllText(StateFile));
+            }
+        }
+
+        private static void JobsHandlerOnOnJobsChecked()
+        {
+            UpdateMessages();
+        }
+
+        private static async void UpdateMessages()
+        {
+            List<long> chatIds = ChatMessages.Keys.ToList();
+
+            foreach (var chatId in chatIds)
+            {
+                for (var cm = 0; cm < ChatMessages[chatId].Count; cm++)
+                {
+                    var message = ChatMessages[chatId][cm];
+                    if (message.completed) return;
+
+                    Logger.Log($"Updating not completed message {message.messageId}");
+
+                    var build = _jobsHandler.GetBuildDescription(message.jobName, message.buildNumber);
+                    
+                    switch (build.Building)
+                    {
+                        case false when message.completed:
+                            continue;
+                        case false when !message.completed:
+                            message.completed = true;
+                            break;
+                    }
+
+                    try
+                    {
+                        await _botClient.EditMessageTextAsync(chatId, message.messageId, message.ToMessageString(build),
+                            ParseMode.Markdown, replyMarkup: message.GetKeyboard(build));
+                    }
+                    catch (Telegram.Bot.Exceptions.MessageIsNotModifiedException)
+                    {
+                    }
+                }
             }
 
-            var testJob = client.Jobs.Get<JenkinsFreeStyleJob>("TestPipeline");
-            Console.WriteLine(testJob.Builds.Count());
-            
-            var build = client.Builds.Get<JenkinsBuildBase>("TestPipeline", "3");
-            Console.WriteLine(build.Duration);
-            
-            // var newJob = client.Jobs.BuildWithParameters("Differences_Android", new Dictionary<string, string>()
-            // {
-            //     // {"PROJECT_TITLE", "Difference Master (android)"}, 
-            //     {"UNITY_PATH", "/Applications/Unity/Hub/Editor/2019.4.7f1/Unity.app/Contents/MacOS/Unity"}, 
-            //     {"PROJECT_TITLE", "/Users/admin/Jenkins/Builds/Differences_Android/result.aab"}, 
-            //     {"LOG_TELEGRAM", "curl -s -X POST https://api.telegram.org/bot1120291876:AAF5V0tAH6z3ZtraL2kjwWkIlxDKJ9xtzAo/sendMessage -d chat_id=-440765607"}, 
-            // });
-            // Console.WriteLine(newJob.QueueItemUrl);
+            SaveState();
+        }
 
-            // var text = client.Builds.GetConsoleText("Differences_Pipeline", "16");
-            // Console.WriteLine(text);
+        private static async void Bot_OnMessage(object sender, MessageEventArgs e)
+        {
+            try
+            {
+                await AnswerMessage(e);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogException(ex);
+            }
+        }
+        
+        private static async void Bot_OnCallbackQuery(object sender, CallbackQueryEventArgs e)
+        {
+            try
+            {
+                await AnswerCallbackQuery(e);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogException(ex);
+            }
+        }
+
+        private static async Task AnswerCallbackQuery(CallbackQueryEventArgs e)
+        {
+            var callbackQuery = e.CallbackQuery;
+
+            Logger.Log($"Received a callback query {callbackQuery.Data} from {callbackQuery.From.ToUserString()}");
+
+            if (callbackQuery.Data.Contains(":"))
+            {
+                var replyText = "Wtf";
+                
+                var split = callbackQuery.Data.Split(':');
+                var command = split[0];
+                switch (command)
+                {
+                    case "abort":
+                        var jobName = split[1];
+                        var buildNum = split[2];
+                        replyText = $"Aborting {jobName} #{buildNum}";
+                        _jobsHandler.AbortBuild(jobName, buildNum);
+                        break;
+                }
+                
+                await _botClient.AnswerCallbackQueryAsync(
+                    callbackQuery.Id,
+                    replyText
+                );
+            }
+            else
+            {
+                await _botClient.AnswerCallbackQueryAsync(
+                    callbackQuery.Id,
+                    "Something went wrong"
+                );
+            }
+        }
+
+        private static async Task AnswerMessage(MessageEventArgs e)
+        {
+            var msg = e.Message;
+            var chatId = msg.Chat.Id;
+            //var fromId = msg.From.Id;
+
+            async Task Reply(string text)
+            {
+                await _botClient.SendTextMessageAsync(chatId, text, parseMode: ParseMode.Markdown);
+            }
+
+            Logger.Log($"Received a {msg.Type} {msg.Text} message from {msg.From.ToUserString()}");
+
+            if (!ChatMessages.ContainsKey(chatId))
+            {
+                ChatMessages.Add(chatId, new List<ProgressiveChatMessage>());
+            }
+
+            await Reply("Hello there");
+        }
+
+        private static async void JobsHandlerOnOnNewBuildStarted(string jobName, JenkinsBuildBase build)
+        {
+            Logger.Log($"Build {build.Number} started in job {jobName}");
+
+            foreach (var chatMessage in ChatMessages)
+            {
+                var progressiveMessage = new ProgressiveChatMessage {jobName = jobName, buildNumber = build.Number};
+
+                var chatId = chatMessage.Key;
+                var message = await _botClient.SendTextMessageAsync(chatId, progressiveMessage.ToMessageString(build),
+                    ParseMode.Markdown, replyMarkup: progressiveMessage.GetKeyboard(build));
+
+                progressiveMessage.chatId = message.Chat.Id;
+                progressiveMessage.messageId = message.MessageId;
+                ChatMessages[chatId].Add(progressiveMessage);
+
+                Logger.Log($"Added progressive message to {chatId}");
+            }
+
+            SaveState();
+        }
+    }
+
+    public class ProgressiveChatMessage
+    {
+        public long chatId;
+        public int messageId;
+        public string jobName;
+        public int? buildNumber;
+        public bool completed;
+
+        public TimeSpan GetDuration(JenkinsBuildBase build)
+        {
+            var diff = DateTime.Now - build.TimeStamp.Value.FromUnixTimestampMs().ToLocalTime();
+            return diff;
+        }
+        
+        public string ToMessageString(JenkinsBuildBase build)
+        {
+            string progressBar = "Not available";
+
+            var duration = GetDuration(build).TotalMilliseconds;
+            if (build?.EstimatedDuration != null)
+            {
+                const int BarLength = 15;
+                progressBar = "";
+
+                for (int i = 0; i < BarLength; i++)
+                {
+                    double? bt = duration / (double) build.EstimatedDuration;
+                    float t = i / (float) BarLength;
+                    progressBar += t < bt ? "▓" : "░";
+                }
+            }
+
+            var status = build?.Building != null 
+                                ? build.Building.Value 
+                                    ? "Building" 
+                                    : "Not building" 
+                                : "Not available";
+
+            return $"*{jobName} #{build.Number}*\n" +
+                   $"_Status_: {status}\n" +
+                   $"_Build started at_: {build.TimeStamp.Value.FromUnixTimestampMs().ToLocalTime():G}\n" +
+                   $"_Duration_: ~{GetDuration(build).ToHumanReadable()}\n" +
+                   $"_Estimated build time_: ~{build.EstimatedDuration.ToTimespan().ToHumanReadable()}\n" +
+                   $"_Progress:_ {progressBar}\n" +
+                   $"\n_Updated at:_ {DateTime.Now:G}\n";
+        }
+        
+        public InlineKeyboardMarkup GetKeyboard(JenkinsBuildBase build)
+        {
+            if (build?.Building == true)
+            {
+                var inlineKeyboard = new InlineKeyboardMarkup(new[]
+                {
+                    new[]
+                    {
+                        new InlineKeyboardButton()
+                        {
+                            Text = $"Abort",
+                            CallbackData = $"abort:{jobName}:{build.Number}"
+                        },
+                    },
+                });
+                return inlineKeyboard;
+            }
+            else
+            {
+                return null;
+            }
         }
     }
 }

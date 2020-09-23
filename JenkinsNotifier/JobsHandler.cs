@@ -7,58 +7,63 @@ using JenkinsNET.Models;
 
 namespace JenkinsNotifier
 {
-    public class JobsHandler
+    public class JobsHandler : IDisposable
     {
-        private static int CheckDelayMs => 5000;
-        
-        public static event Action<string, JenkinsBuildDescription> OnNewBuildStarted = (jobName, build) => { };
-        public static event Action<string, JenkinsBuildDescription> OnBuildUpdated = (jobName, build) => { };
-        public static event Action<string, JenkinsBuildDescription> OnBuildCompleted = (jobName, build) => { };
-        public static event Action<string, JenkinsBuildDescription> OnBuildDeleted = (jobName, build) => { };
+        public event Action<string, JenkinsBuildBase> OnNewBuildStarted = (jobName, build) => { };
+        public event Action OnJobsChecked = () => { };
 
-        public static bool Started { get; private set; }
+        public bool Started { get; private set; }
         
-        private static Dictionary<string, List<JenkinsBuildDescription>> _jobsBuilds = new Dictionary<string, List<JenkinsBuildDescription>>();
-        private static JenkinsClient Client;
-       
-        
-        public static void Initialize()
+        private Dictionary<string, List<int?>> _jobsBuilds;
+        private readonly JenkinsClient _client;
+
+        public JobsHandler(string baseUrl, string userName, string apiToken)
         {
-            Client = new JenkinsClient {
-                BaseUrl = "http://192.168.0.252:8080/",
-                UserName = "admin",
-                ApiToken = "11aa6eb88577c4e8fd7a9b6a1b5c5ad279",
+            Logger.Log("Initializing JobsHandler..");
+
+            _client = new JenkinsClient {
+                BaseUrl = baseUrl,
+                UserName = userName,
+                ApiToken = apiToken,
             };
             
-            _jobsBuilds = new Dictionary<string, List<JenkinsBuildDescription>>();
-            
-            CheckJobsLoop();
+            _jobsBuilds = new Dictionary<string, List<int?>>();
         }
 
-        public static void DeInitialize()
+        public async void StartPolling()
         {
-            Started = false;
-        }
+            if(Started) return;
 
-        private static async void CheckJobsLoop()
-        {
             Started = true;
             while (Started)
             {
                 CheckJobs();
-                await Task.Delay(CheckDelayMs);
+                await Task.Delay(Config.Current.CheckJobsDelayMs);
             }
         }
 
-        private static void CheckJobs()
+        public async void AbortBuild(string jobName, string buildNumber)
         {
-            Dictionary<string, List<JenkinsBuildDescription>> newJobs = new Dictionary<string, List<JenkinsBuildDescription>>();
+            
+        }
 
-            var jobs = Client.Get().Jobs;
+        public JenkinsBuildBase GetBuildDescription(string jobName, int? buildNumber)
+        {
+            var build = _client.Builds.Get<JenkinsBuildBase>(jobName, buildNumber.ToString());
+            return build;
+        }
+
+        private void CheckJobs()
+        {
+            Logger.Log("Checking jobs");
+            
+            Dictionary<string, List<int?>> updateJobs = new Dictionary<string, List<int?>>();
+
+            var jobs = _client.Get().Jobs;
             foreach (var job in jobs)
             {
-                var jobDescription = Client.Jobs.Get<JenkinsFreeStyleJob>(job.Name);
-                newJobs.Add(job.Name, jobDescription.Builds.ToList());
+                var jobDescription = _client.Jobs.Get<JenkinsFreeStyleJob>(job.Name);
+                updateJobs.Add(job.Name, jobDescription.Builds.Select(x => x.Number).ToList());
             }
 
             if (_jobsBuilds.Keys.Count != 0)
@@ -66,41 +71,33 @@ namespace JenkinsNotifier
                 foreach (var jobsBuild in _jobsBuilds)
                 {
                     var jobName = jobsBuild.Key;
-                    if (newJobs.TryGetValue(jobName, out var newBuilds))
+                    if (updateJobs.TryGetValue(jobName, out var updateBuilds))
                     {
                         var currentBuilds = _jobsBuilds[jobName];
-                        var startedBuilds = newBuilds
-                            .FindAll(x => !currentBuilds.Exists(b => b.Number == x.Number));
+                        var newBuilds = updateBuilds
+                            .FindAll(x => !currentBuilds.Exists(b => b == x));
 
-
-                        foreach (var startedBuild in startedBuilds)
+                        foreach (var startedBuild in newBuilds)
                         {
-                            _jobsBuilds[jobName].Add(startedBuild);
-                            OnNewBuildStarted?.Invoke(jobName, startedBuild);
+                            var buildDescription = GetBuildDescription(jobName, startedBuild);
+                            OnNewBuildStarted?.Invoke(jobName, buildDescription);
                         }
-
-                        foreach (var newBuild in newBuilds)
-                        {
-                            OnBuildUpdated(jobName, newBuild);
-                        }
-
-                        foreach (var newBuild in newBuilds)
-                        {
-                            var currentBuild = _jobsBuilds[jobName].Find(x => x.Number == newBuild.Number);
-                            if (currentBuild != null)
-                            {
-                                
-                            }
-                            else
-                            {
-                                // TODO: Handle deletion
-                            }
-                        }
+                    }
+                    else
+                    {
+                        Logger.Log($"JOB {jobName} WAS DELETED!");
                     }
                 }
             }
+
+            _jobsBuilds = updateJobs;
             
-            _jobsBuilds = newJobs;
+            OnJobsChecked?.Invoke();
+        }
+        
+        public void Dispose()
+        {
+            Started = false;
         }
     }
 }
