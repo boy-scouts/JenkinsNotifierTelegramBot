@@ -69,7 +69,6 @@ namespace JenkinsNotifier
         {
             string url = _client.BaseUrl + $"job/{jobName}/{buildNumber}/stop";
             var responseContent = await SendPostRequest(url);
-            Logger.Log(responseContent);
         }
 
         private async Task<string> SendPostRequest(string url)

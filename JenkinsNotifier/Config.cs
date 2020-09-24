@@ -86,8 +86,11 @@ namespace JenkinsNotifier
             
             [JsonProperty("stateFile")]
             public string StateFile { get; private set; } = "state.json";
+
+            [JsonProperty("selectedChatsOnly")]
+            public bool SelectedChatsOnly { get; private set; } = true;
             
-            [JsonProperty("chats")]
+            [JsonProperty("selectedChats")]
             public List<long> Chats { get; private set; } = new List<long>();
         }
 

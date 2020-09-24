@@ -67,7 +67,7 @@ namespace JenkinsNotifier
             }
         }
 
-        private static void TryAddChatId(long chatId)
+        public static void TryAddChatId(long chatId)
         {
             if (!_chatMessages.ContainsKey(chatId))
             {
@@ -78,7 +78,7 @@ namespace JenkinsNotifier
             SaveState();
         }
         
-        private static void TryRemoveChatId(long chatId)
+        public  static void TryRemoveChatId(long chatId)
         {
             if (_chatMessages.ContainsKey(chatId))
             {
@@ -169,6 +169,8 @@ namespace JenkinsNotifier
         
         private static void BotClient_OnUpdate(object sender, UpdateEventArgs e)
         {
+            if (Config.Current.SelectedChatsOnly) return;
+            
             var chatId = e.Update?.Message?.Chat?.Id;
             if (chatId.HasValue)
             {
@@ -206,7 +208,7 @@ namespace JenkinsNotifier
                         var jobName = split[1];
                         var buildNum = split[2];
                         replyText = $"Aborting {jobName} #{buildNum}";
-                        _jobsHandler.AbortBuild(jobName, buildNum);
+                        await AbortBuild(jobName, buildNum);
                         break;
                 }
 
@@ -222,6 +224,24 @@ namespace JenkinsNotifier
                     "Something went wrong"
                 );
             }
+        }
+
+        private static async Task AbortBuild(string jobName, string buildNum)
+        {
+            _jobsHandler.AbortBuild(jobName, buildNum);
+            foreach (var chatMessage in _chatMessages)
+            {
+                foreach (var progressiveChatMessage in chatMessage.Value)
+                {
+                    if (progressiveChatMessage.JobName == jobName &&
+                        progressiveChatMessage.BuildNumber?.ToString() == buildNum)
+                    {
+                        progressiveChatMessage.IsAborting = true;
+                    }
+                }
+            }
+
+            await UpdateMessages();
         }
 
         private static async Task AnswerMessage(MessageEventArgs e)
@@ -287,7 +307,6 @@ namespace JenkinsNotifier
             switch (apiRequestException.ErrorCode)
             {
                 case 403:
-                case 400:
                     TryRemoveChatId(chatId);
                     break;
             }

@@ -11,6 +11,7 @@ namespace JenkinsNotifier
         public string JobName;
         public int? BuildNumber;
         public bool Completed;
+        public bool IsAborting;
         public bool? IsBuilding;
         public long BuildProgress;
         public string BuildResult;
@@ -61,6 +62,10 @@ namespace JenkinsNotifier
             if (Completed && BuildResult != null)
             {
                 status = BuildResult;
+            }
+            else if(IsAborting)
+            {
+                status = "ABORTING..";
             }
             else if (IsBuilding != null)
             {
