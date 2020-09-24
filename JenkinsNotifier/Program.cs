@@ -20,14 +20,16 @@ namespace JenkinsNotifier
         private static Dictionary<long, List<ProgressiveChatMessage>> _chatMessages =
             new Dictionary<long, List<ProgressiveChatMessage>>();
 
-        private static bool Started = false;
+        private static bool _started;
+
+        private static TimedSemaphore _messageTimedSemaphore;
         
         // ReSharper disable once UnusedParameter.Local
         static void Main(string[] args)
         {
             Start();
 
-            while (!Started)
+            while (!_started)
             {
                 Thread.Sleep(100);
             }
@@ -45,6 +47,9 @@ namespace JenkinsNotifier
             Config.Load();
             LoadState();
 
+            _messageTimedSemaphore =
+                new TimedSemaphore(Config.Current.TimeWindowSeconds, Config.Current.MaxHitsPerTimeWindow);
+            
             _botClient = new TelegramBotClient(Config.Current.BotAccessToken);
             _botClient.OnMessage += Bot_OnMessage;
             _botClient.OnCallbackQuery += Bot_OnCallbackQuery;
@@ -58,7 +63,7 @@ namespace JenkinsNotifier
             _jobsHandler.OnJobsChecked += JobsHandlerOnOnJobsChecked;
             _jobsHandler.StartPolling();
 
-            Started = true;
+            _started = true;
             
             Logger.Log("Started!");
         }
@@ -145,16 +150,16 @@ namespace JenkinsNotifier
                         }
 
                         message.Update(build);
+
+                        await _messageTimedSemaphore.Hit();
+                        
                         await _botClient.EditMessageTextAsync(chatId, message.MessageId,
                             message.GetDescriptionString(),
                             ParseMode.Markdown, replyMarkup: message.GetKeyboard(build));
                     }
-                    catch (ApiRequestException apiRequestException)
-                    {
-                        RemoveChatIfNeeded(apiRequestException, chatId);
-                    }
                     catch (Exception ex)
                     {
+                        RemoveChatIfNeeded(ex, chatId);
                         Logger.LogException(ex);
                     }
                 }
@@ -169,16 +174,13 @@ namespace JenkinsNotifier
             {
                 await AnswerMessage(e);
             }
-            catch (ApiRequestException apiRequestException)
+            catch (Exception ex)
             {
                 var chatId = e?.Message?.Chat?.Id;
                 if (chatId.HasValue)
                 {
-                    RemoveChatIfNeeded(apiRequestException, chatId.Value);
+                    RemoveChatIfNeeded(ex, chatId.Value);
                 }
-            }
-            catch (Exception ex)
-            {
                 Logger.LogException(ex);
             }
         }
@@ -228,6 +230,7 @@ namespace JenkinsNotifier
                         break;
                 }
 
+                await _messageTimedSemaphore.Hit();
                 await _botClient.AnswerCallbackQueryAsync(
                     callbackQuery.Id,
                     replyText
@@ -235,6 +238,7 @@ namespace JenkinsNotifier
             }
             else
             {
+                await _messageTimedSemaphore.Hit();
                 await _botClient.AnswerCallbackQueryAsync(
                     callbackQuery.Id,
                     "Something went wrong"
@@ -268,6 +272,7 @@ namespace JenkinsNotifier
 
             async Task Reply(string text)
             {
+                await _messageTimedSemaphore.Hit();
                 await _botClient.SendTextMessageAsync(chatId, text, parseMode: ParseMode.Markdown);
             }
 
@@ -284,6 +289,7 @@ namespace JenkinsNotifier
         private static async void JobsHandler_OnNewBuildStarted(string jobName, JenkinsBuildWithProgress build)
         {
             Logger.Log($"Build {build.Number} started in job {jobName}");
+            Logger.Log($"Notifying {_chatMessages.Count} chats");
 
             foreach (var chatMessage in _chatMessages)
             {
@@ -294,6 +300,7 @@ namespace JenkinsNotifier
                     var progressiveMessage = new ProgressiveChatMessage {JobName = jobName, BuildNumber = build.Number};
 
                     progressiveMessage.Update(build);
+                    await _messageTimedSemaphore.Hit();
                     var message = await _botClient.SendTextMessageAsync(chatId,
                         progressiveMessage.GetDescriptionString(),
                         ParseMode.Markdown, replyMarkup: progressiveMessage.GetKeyboard(build));
@@ -304,12 +311,9 @@ namespace JenkinsNotifier
 
                     Logger.Log($"Added progressive message to {chatId}");
                 }
-                catch (ApiRequestException apiRequestException)
-                {
-                    RemoveChatIfNeeded(apiRequestException, chatId);
-                }
                 catch (Exception e)
                 {
+                    RemoveChatIfNeeded(e, chatId);
                     Logger.LogException(e);
                 }
             }
@@ -317,14 +321,28 @@ namespace JenkinsNotifier
             SaveState();
         }
 
-        private static void RemoveChatIfNeeded(ApiRequestException apiRequestException, long chatId)
+        private static void RemoveChatIfNeeded(Exception ex, long chatId)
         {
-            Logger.Log($"API REQUEST EXCEPTION!\nError Code: {apiRequestException.ErrorCode}\n{apiRequestException}");
-            switch (apiRequestException.ErrorCode)
+            if (ex is ApiRequestException apiRequestException)
             {
-                case 403:
+                Logger.Log($"API REQUEST EXCEPTION!\nError Code: {apiRequestException.ErrorCode}\n{apiRequestException}");
+                
+                if (apiRequestException is ChatNotFoundException)
+                {
                     TryRemoveChatId(chatId);
-                    break;
+                }
+                else if (apiRequestException.ErrorCode == 403)
+                {
+                    TryRemoveChatId(chatId);
+                }
+            }
+        }
+
+        public static void ListChats()
+        {
+            foreach (var chatMessage in _chatMessages)
+            {
+                Console.WriteLine(chatMessage.Key);
             }
         }
     }
