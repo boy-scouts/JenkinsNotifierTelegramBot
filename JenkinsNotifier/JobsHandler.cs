@@ -18,19 +18,38 @@ namespace JenkinsNotifier
         private bool Started { get; set; }
         
         private Dictionary<string, List<int?>> _jobsBuilds;
-        private readonly JenkinsClient _client;
+        private JenkinsClient _client;
 
-        public JobsHandler(string baseUrl, string userName, string apiToken)
+        public async Task Initialize(string baseUrl, string userName, string apiToken)
         {
             Logger.Log("Initializing JobsHandler..");
 
-            _client = new JenkinsClient {
-                BaseUrl = baseUrl,
-                UserName = userName,
-                ApiToken = apiToken,
-            };
+            bool initialized = false;
+            while (!initialized)
+            {
+                try
+                {
+                    _client = new JenkinsClient
+                    {
+                        BaseUrl = baseUrl,
+                        UserName = userName,
+                        ApiToken = apiToken,
+                    };
+
+                    await _client.GetAsync();
+
+                    initialized = true;
+
+                    _jobsBuilds = new Dictionary<string, List<int?>>();
+                }
+                catch (Exception)
+                {
+                    Logger.Log($"Unable to connect to jenkins! Retrying..");
+                }
+
+                await Task.Delay(1000);
+            }
             
-            _jobsBuilds = new Dictionary<string, List<int?>>();
         }
 
         public async void StartPolling()
@@ -40,8 +59,16 @@ namespace JenkinsNotifier
             Started = true;
             while (Started)
             {
-                CheckJobs();
-                await Task.Delay(Config.Current.CheckJobsDelayMs);
+                try
+                {
+                    await CheckJobs();
+                    await Task.Delay(Config.Current.CheckJobsDelayMs);
+                }
+                catch (Exception e)
+                {
+                    Logger.Log("Exception while polling jobs!");
+                    Logger.Log(e);
+                }
             }
         }
 
@@ -100,7 +127,7 @@ namespace JenkinsNotifier
             return build;
         }
 
-        private async void CheckJobs()
+        private async Task CheckJobs()
         {
             Dictionary<string, List<int?>> updateJobs = new Dictionary<string, List<int?>>();
 

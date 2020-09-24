@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Telegram.Bot;
@@ -19,8 +20,25 @@ namespace JenkinsNotifier
         private static Dictionary<long, List<ProgressiveChatMessage>> _chatMessages =
             new Dictionary<long, List<ProgressiveChatMessage>>();
 
+        private static bool Started = false;
+        
         // ReSharper disable once UnusedParameter.Local
         static void Main(string[] args)
+        {
+            Start();
+
+            while (!Started)
+            {
+                Thread.Sleep(100);
+            }
+            
+            while (!CommandHandler.HandleCommand())
+            {
+                // Do nothing
+            }
+        }
+
+        private static async void Start()
         {
             Logger.Log("Starting..");
 
@@ -33,18 +51,16 @@ namespace JenkinsNotifier
             _botClient.OnUpdate += BotClient_OnUpdate;
             _botClient.StartReceiving();
 
-            _jobsHandler = new JobsHandler(Config.Current.JenkinsBaseUrl, Config.Current.JenkinsUserName,
+            _jobsHandler = new JobsHandler();
+            await _jobsHandler.Initialize(Config.Current.JenkinsBaseUrl, Config.Current.JenkinsUserName,
                 Config.Current.JenkinsApiToken);
             _jobsHandler.OnNewBuildStarted += JobsHandler_OnNewBuildStarted;
             _jobsHandler.OnJobsChecked += JobsHandlerOnOnJobsChecked;
             _jobsHandler.StartPolling();
 
+            Started = true;
+            
             Logger.Log("Started!");
-
-            while (!CommandHandler.HandleCommand())
-            {
-                // Do nothing
-            }
         }
         
         private static void SaveState()
