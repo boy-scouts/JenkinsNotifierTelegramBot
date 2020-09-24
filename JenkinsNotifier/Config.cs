@@ -83,6 +83,12 @@ namespace JenkinsNotifier
 
             [JsonProperty("checkJobsDelayMs")]
             public int CheckJobsDelayMs { get; private set; } = 5000;
+            
+            [JsonProperty("stateFile")]
+            public string StateFile { get; private set; } = "state.json";
+            
+            [JsonProperty("chats")]
+            public List<long> Chats { get; private set; } = new List<long>();
         }
 
     }

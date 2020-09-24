@@ -1,15 +1,18 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading.Tasks;
 using JenkinsNET;
 using JenkinsNET.Models;
+using Newtonsoft.Json;
 
 namespace JenkinsNotifier
 {
     public class JobsHandler : IDisposable
     {
-        public event Action<string, JenkinsBuildBase> OnNewBuildStarted = (jobName, build) => { };
+        public event Action<string, JenkinsBuildWithProgress> OnNewBuildStarted = (jobName, build) => { };
         public event Action OnJobsChecked = () => { };
 
         private bool Started { get; set; }
@@ -42,21 +45,64 @@ namespace JenkinsNotifier
             }
         }
 
-        public async void AbortBuild(string jobName, string buildNumber)
+        public async Task<long> GetBuildProgress(string jobName, string buildNumber)
         {
-            await Task.Delay(1);
+            string url = _client.BaseUrl + $"job/{jobName}/{buildNumber}/api/json?tree=executor[progress]";
+            var responseContent = await SendPostRequest(url);
+            try
+            {
+                var jobProgressData = JsonConvert.DeserializeObject<JobProgressData>(responseContent);
+                if (jobProgressData.Executor != null)
+                {
+                    return jobProgressData.Executor.Progress;
+                }
+            }
+            catch (Exception e)
+            {
+                Logger.LogException(e);
+            }
+
+            return 0;
         }
 
-        public JenkinsBuildBase GetBuildDescription(string jobName, int? buildNumber)
+        public async void AbortBuild(string jobName, string buildNumber)
         {
-            var build = _client.Builds.Get<JenkinsBuildBase>(jobName, buildNumber.ToString());
+            string url = _client.BaseUrl + $"job/{jobName}/{buildNumber}/stop";
+            var responseContent = await SendPostRequest(url);
+            Logger.Log(responseContent);
+        }
+
+        private async Task<string> SendPostRequest(string url)
+        {
+            var httpRequestMessage = new HttpRequestMessage
+            {
+                Method = HttpMethod.Post,
+                RequestUri = new Uri(url),
+                Headers =
+                {
+                    {
+                        HttpRequestHeader.Authorization.ToString(),
+                        "Basic " + $"{_client.UserName}:{_client.ApiToken}".Base64Encode()
+                    },
+                    {"X-Version", "1"}
+                },
+                Content = new StringContent(string.Empty)
+            };
+
+            HttpResponseMessage response = await WebRequestHelper.Client.SendAsync(httpRequestMessage);
+            var responseContent = await response.Content.ReadAsStringAsync();
+            return responseContent;
+        }
+
+        public async Task<JenkinsBuildWithProgress> GetBuildDescription(string jobName, int? buildNumber)
+        {
+            var build = _client.Builds.Get<JenkinsBuildWithProgress>(jobName, buildNumber.ToString());
+            build.Progress = await GetBuildProgress(jobName, buildNumber.ToString());
             return build;
         }
 
-        private void CheckJobs()
+        private async void CheckJobs()
         {
-            Logger.Log("Checking jobs");
-            
             Dictionary<string, List<int?>> updateJobs = new Dictionary<string, List<int?>>();
 
             var jobs = _client.Get().Jobs;
@@ -79,7 +125,7 @@ namespace JenkinsNotifier
 
                         foreach (var startedBuild in newBuilds)
                         {
-                            var buildDescription = GetBuildDescription(jobName, startedBuild);
+                            var buildDescription = await GetBuildDescription(jobName, startedBuild);
                             OnNewBuildStarted?.Invoke(jobName, buildDescription);
                         }
                     }

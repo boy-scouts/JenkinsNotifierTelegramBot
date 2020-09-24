@@ -20,7 +20,7 @@ namespace JenkinsNotifier
         
         public static void AppendWithDateToFile(object o)
         {
-            AppendToFile($"{DateTime.Now:G}: {o}\n");
+            AppendToFile($"[{DateTime.Now:yyyy/MM/dd hh:mm:ss}] {o}\n");
         }
 
         private static void AppendToFile(string text)
