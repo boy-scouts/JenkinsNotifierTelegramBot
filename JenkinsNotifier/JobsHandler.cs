@@ -92,10 +92,10 @@ namespace JenkinsNotifier
             return 0;
         }
 
-        public async void AbortBuild(string jobName, string buildNumber)
+        public async Task AbortBuild(string jobName, string buildNumber)
         {
             string url = _client.BaseUrl + $"job/{jobName}/{buildNumber}/stop";
-            var responseContent = await SendPostRequest(url);
+            await SendPostRequest(url);
         }
 
         private async Task<string> SendPostRequest(string url)
@@ -124,6 +124,7 @@ namespace JenkinsNotifier
         {
             var build = _client.Builds.Get<JenkinsBuildWithProgress>(jobName, buildNumber.ToString());
             build.Progress = await GetBuildProgress(jobName, buildNumber.ToString());
+            build.UpdateId++;
             return build;
         }
 

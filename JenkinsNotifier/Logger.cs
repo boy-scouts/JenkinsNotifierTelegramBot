@@ -1,16 +1,22 @@
 ﻿using System;
 using System.IO;
+using System.Threading;
 
 namespace JenkinsNotifier
 {
     public static class Logger
     {
         static string LogPath = "bot.log";
-
-        public static void Log(object o)
+        private static SemaphoreSlim SemaphoreSlim = new SemaphoreSlim(1, 1);
+        
+        public static async void Log(object o)
         {
+            await SemaphoreSlim.WaitAsync();
+            
             Console.WriteLine(o);
             AppendWithDateToFile(o);
+
+            SemaphoreSlim.Release();
         }
 
         public static void LogException(Exception e)

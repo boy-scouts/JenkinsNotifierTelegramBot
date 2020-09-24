@@ -12,6 +12,7 @@ namespace JenkinsNotifier
         {
             { "quit", new ConsoleCommand((_) => true, "Stop bot and quit") },
             { "help", new ConsoleCommand((_) => ListCommands(), "List commands") },
+            { "listchat", new ConsoleCommand(ListChats, "List chats. ") },
             { "addchat", new ConsoleCommand(AddChat, "Add chat. Syntax: \"addchat [chat id]\"") },
             { "rmchat", new ConsoleCommand(RemoveChat, "Remove chat. Syntax: \"rmchat [chat id]\"") },
         };
@@ -54,6 +55,13 @@ namespace JenkinsNotifier
                 Logger.Log("Can't parse chat id");
             }
             
+            return false;
+        }
+
+        private static bool ListChats(string _)
+        {
+            Program.ListChats();
+
             return false;
         }
     }

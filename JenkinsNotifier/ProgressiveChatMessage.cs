@@ -7,6 +7,8 @@ namespace JenkinsNotifier
     public class ProgressiveChatMessage
     {
         public long ChatId;
+        public bool HasCreated;
+        public bool HasUpdateNotified;
         public int MessageId;
         public string JobName;
         public int? BuildNumber;
@@ -18,6 +20,8 @@ namespace JenkinsNotifier
         public long? BuildEstimatedDuration;
         public long? BuildTimeStamp;
         public long BuildCompletionTimeStamp;
+
+        private long _lastBuildUpdateId;
 
         private TimeSpan GetDuration()
         {
@@ -32,11 +36,16 @@ namespace JenkinsNotifier
 
         public void Update(JenkinsBuildWithProgress build)
         {
+            if (_lastBuildUpdateId > build.UpdateId) return;
+            _lastBuildUpdateId = build.UpdateId;
+            
             IsBuilding = build.Building;
             BuildProgress = build.Progress > BuildProgress ? build.Progress : BuildProgress;
             BuildResult = build.Result;
             BuildEstimatedDuration = build.EstimatedDuration;
             BuildTimeStamp = build.TimeStamp;
+
+            HasUpdateNotified = false;
         }
 
         public string GetDescriptionString()
@@ -91,14 +100,9 @@ namespace JenkinsNotifier
             return $"{JobName} #{BuildNumber}";
         }
 
-        public string ToCompletedMessageString(JenkinsBuildBase jenkinsBuildBase)
+        public InlineKeyboardMarkup GetKeyboard()
         {
-            return $"Build {ToBuildString()} ZALETEL";
-        }
-        
-        public InlineKeyboardMarkup GetKeyboard(JenkinsBuildBase build)
-        {
-            if (build?.Building == true)
+            if (IsBuilding == true)
             {
                 var inlineKeyboard = new InlineKeyboardMarkup(new[]
                 {
@@ -107,7 +111,7 @@ namespace JenkinsNotifier
                         new InlineKeyboardButton()
                         {
                             Text = $"Abort",
-                            CallbackData = $"abort:{JobName}:{build.Number}"
+                            CallbackData = $"abort:{JobName}:{BuildNumber}"
                         },
                     },
                 });
@@ -124,6 +128,7 @@ namespace JenkinsNotifier
             if (Completed) return;
 
             Completed = true;
+            BuildProgress = 100;
             BuildCompletionTimeStamp = DateTime.Now.ToUnixTimestamp();
         }
     }

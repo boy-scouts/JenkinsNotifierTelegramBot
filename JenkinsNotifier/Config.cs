@@ -82,7 +82,10 @@ namespace JenkinsNotifier
             public List<long> AdminsIds { get; private set; } = new List<long>();
 
             [JsonProperty("checkJobsDelayMs")]
-            public int CheckJobsDelayMs { get; private set; } = 5000;
+            public int CheckJobsDelayMs { get; private set; } = 3000;
+            
+            [JsonProperty("sendMessagesDelayMs")]
+            public int SendMessagesDelayMs { get; private set; } = 3000;
             
             [JsonProperty("stateFile")]
             public string StateFile { get; private set; } = "state.json";
@@ -92,6 +95,12 @@ namespace JenkinsNotifier
             
             [JsonProperty("selectedChats")]
             public List<long> Chats { get; private set; } = new List<long>();
+
+            [JsonProperty("timeWindowSeconds")] 
+            public float TimeWindowSeconds { get; private set; } = 60;
+
+            [JsonProperty("maxHitsPerTimeWindow")] 
+            public float MaxHitsPerTimeWindow { get; private set; } = 20;
         }
 
     }

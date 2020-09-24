@@ -49,6 +49,7 @@ namespace JenkinsNotifier
         public async Task Hit()
         {
             int delay = 0;
+            int longDelayMs = 5000;
             while (true)
             {
                 var canHit = await CheckIfCanHitNow();
@@ -56,13 +57,13 @@ namespace JenkinsNotifier
                 await Task.Delay(HitCheckDelayMs);
                 delay += HitCheckDelayMs;
 
-                if (delay % 1000 == 0)
+                if (delay % longDelayMs == 0)
                 {
                     Logger.Log($"Delay is {delay}ms right now..");
                 }
             }
 
-            if (delay > 1000)
+            if (delay > longDelayMs)
             {
                 Logger.Log($"Delay released after {delay}ms");
             }

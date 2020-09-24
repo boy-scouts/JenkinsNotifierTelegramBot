@@ -38,6 +38,8 @@ namespace JenkinsNotifier
             {
                 // Do nothing
             }
+
+            _started = false;
         }
 
         private static async void Start()
@@ -60,11 +62,13 @@ namespace JenkinsNotifier
             await _jobsHandler.Initialize(Config.Current.JenkinsBaseUrl, Config.Current.JenkinsUserName,
                 Config.Current.JenkinsApiToken);
             _jobsHandler.OnNewBuildStarted += JobsHandler_OnNewBuildStarted;
-            _jobsHandler.OnJobsChecked += JobsHandlerOnOnJobsChecked;
             _jobsHandler.StartPolling();
 
             _started = true;
-            
+
+            UpdateJobsLoop();
+            SendMessagesLoop();
+
             Logger.Log("Started!");
         }
         
@@ -110,62 +114,119 @@ namespace JenkinsNotifier
             SaveState();
         }
 
-        private static async void JobsHandlerOnOnJobsChecked()
+        private static async void UpdateJobsLoop()
         {
-            try
+            while (_started)
             {
-                await UpdateMessages();
+                List<long> chatIds = _chatMessages.Keys.ToList();
+
+                foreach (var chatId in chatIds)
+                {
+                    for (var cm = 0; cm < _chatMessages[chatId].Count; cm++)
+                    {
+                        try
+                        {
+                            var progressiveMessage = _chatMessages[chatId][cm];
+                            if (progressiveMessage.Completed) continue;
+
+                            var build = await _jobsHandler.GetBuildDescription(progressiveMessage.JobName, progressiveMessage.BuildNumber);
+
+                            progressiveMessage.Update(build);
+                            switch (build.Building)
+                            {
+                                case false when progressiveMessage.Completed:
+                                    continue;
+                                case false when !progressiveMessage.Completed:
+                                    progressiveMessage.SetCompleted();
+                                    Logger.Log($"Build {progressiveMessage.ToBuildString()} has ended");
+                                    await _messageTimedSemaphore.Hit();
+                                    await SendUpdateProgressiveMessage(chatId, progressiveMessage);
+                                    break;
+                            }
+
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogException(ex);
+                        }
+                    }
+                }
+
+                SaveState();
+                await Task.Delay(Config.Current.CheckJobsDelayMs);
             }
-            catch (Exception e)
+        }
+        
+        private static async void SendMessagesLoop()
+        {
+            while (_started)
             {
-                Logger.LogException(e);
+                List<long> chatIds = _chatMessages.Keys.ToList();
+
+                int createdMessagesCount = 0;
+                int updatedMessagesCount = 0;
+                int failedMessagesCount = 0;
+                foreach (var chatId in chatIds)
+                {
+                    for (var cm = 0; cm < _chatMessages[chatId].Count; cm++)
+                    {
+                        try
+                        {
+                            var progressiveMessage = _chatMessages[chatId][cm];
+
+                            if (!progressiveMessage.HasCreated)
+                            {
+                                await SendCreateProgressiveMessage(chatId, progressiveMessage);
+                                createdMessagesCount++;
+                            }
+                            else if (!progressiveMessage.HasUpdateNotified)
+                            {
+                                await SendUpdateProgressiveMessage(chatId, progressiveMessage);
+                                updatedMessagesCount++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            RemoveChatIfNeeded(ex, chatId);
+                            Logger.LogException(ex);
+                            failedMessagesCount++;
+                        }
+                    }
+                }
+
+                int chatsCount = _chatMessages.Count;
+                if(createdMessagesCount > 0) Logger.Log($"Created {createdMessagesCount} messages");
+                if(updatedMessagesCount > 0) Logger.Log($"Updated {updatedMessagesCount} messages");
+                if(failedMessagesCount > 0) Logger.Log($"Failed to update {failedMessagesCount} messages");
+                
+                
+                await Task.Delay(Config.Current.SendMessagesDelayMs);
             }
         }
 
-        private static async Task UpdateMessages()
+        private static async Task SendUpdateProgressiveMessage(long chatId, ProgressiveChatMessage progressiveMessage)
         {
-            List<long> chatIds = _chatMessages.Keys.ToList();
+            await _messageTimedSemaphore.Hit();
 
-            foreach (var chatId in chatIds)
-            {
-                for (var cm = 0; cm < _chatMessages[chatId].Count; cm++)
-                {
-                    try
-                    {
-                        var message = _chatMessages[chatId][cm];
-                        if (message.Completed) continue;
+            await _botClient.EditMessageTextAsync(chatId, progressiveMessage.MessageId,
+                progressiveMessage.GetDescriptionString(),
+                ParseMode.Markdown, replyMarkup: progressiveMessage.GetKeyboard());
 
-                        var build = await _jobsHandler.GetBuildDescription(message.JobName, message.BuildNumber);
+            progressiveMessage.HasUpdateNotified = true;
+        }
 
-                        switch (build.Building)
-                        {
-                            case false when message.Completed:
-                                continue;
-                            case false when !message.Completed:
-                                message.SetCompleted();
-                                // await _botClient.SendTextMessageAsync(chatId, message.ToCompletedMessageString(build),
-                                //     ParseMode.Markdown);
-                                Logger.Log($"Build {message.ToBuildString()} has ended");
-                                break;
-                        }
+        private static async Task SendCreateProgressiveMessage(long chatId, ProgressiveChatMessage progressiveMessage)
+        {
+            await _messageTimedSemaphore.Hit();
 
-                        message.Update(build);
+            var botMessage = await _botClient.SendTextMessageAsync(chatId,
+                progressiveMessage.GetDescriptionString(),
+                ParseMode.Markdown, replyMarkup: progressiveMessage.GetKeyboard());
 
-                        await _messageTimedSemaphore.Hit();
-                        
-                        await _botClient.EditMessageTextAsync(chatId, message.MessageId,
-                            message.GetDescriptionString(),
-                            ParseMode.Markdown, replyMarkup: message.GetKeyboard(build));
-                    }
-                    catch (Exception ex)
-                    {
-                        RemoveChatIfNeeded(ex, chatId);
-                        Logger.LogException(ex);
-                    }
-                }
-            }
+            progressiveMessage.ChatId = botMessage.Chat.Id;
+            progressiveMessage.MessageId = botMessage.MessageId;
 
-            SaveState();
+            progressiveMessage.HasCreated = true;
         }
 
         private static async void Bot_OnMessage(object sender, MessageEventArgs e)
@@ -225,7 +286,7 @@ namespace JenkinsNotifier
                     case "abort":
                         var jobName = split[1];
                         var buildNum = split[2];
-                        replyText = $"Aborting {jobName} #{buildNum}";
+                        replyText = $"Aborting {jobName} #{buildNum}...";
                         await AbortBuild(jobName, buildNum);
                         break;
                 }
@@ -248,7 +309,7 @@ namespace JenkinsNotifier
 
         private static async Task AbortBuild(string jobName, string buildNum)
         {
-            _jobsHandler.AbortBuild(jobName, buildNum);
+            await _jobsHandler.AbortBuild(jobName, buildNum);
             foreach (var chatMessage in _chatMessages)
             {
                 foreach (var progressiveChatMessage in chatMessage.Value)
@@ -260,8 +321,6 @@ namespace JenkinsNotifier
                     }
                 }
             }
-
-            await UpdateMessages();
         }
 
         private static async Task AnswerMessage(MessageEventArgs e)
@@ -286,10 +345,9 @@ namespace JenkinsNotifier
             await Reply("Hello there");
         }
 
-        private static async void JobsHandler_OnNewBuildStarted(string jobName, JenkinsBuildWithProgress build)
+        private static void JobsHandler_OnNewBuildStarted(string jobName, JenkinsBuildWithProgress build)
         {
             Logger.Log($"Build {build.Number} started in job {jobName}");
-            Logger.Log($"Notifying {_chatMessages.Count} chats");
 
             foreach (var chatMessage in _chatMessages)
             {
@@ -300,13 +358,6 @@ namespace JenkinsNotifier
                     var progressiveMessage = new ProgressiveChatMessage {JobName = jobName, BuildNumber = build.Number};
 
                     progressiveMessage.Update(build);
-                    await _messageTimedSemaphore.Hit();
-                    var message = await _botClient.SendTextMessageAsync(chatId,
-                        progressiveMessage.GetDescriptionString(),
-                        ParseMode.Markdown, replyMarkup: progressiveMessage.GetKeyboard(build));
-
-                    progressiveMessage.ChatId = message.Chat.Id;
-                    progressiveMessage.MessageId = message.MessageId;
                     _chatMessages[chatId].Add(progressiveMessage);
 
                     Logger.Log($"Added progressive message to {chatId}");
