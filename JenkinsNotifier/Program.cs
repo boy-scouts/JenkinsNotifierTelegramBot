@@ -168,38 +168,37 @@ namespace JenkinsNotifier
                 int failedMessagesCount = 0;
                 foreach (var chatId in chatIds)
                 {
-                    for (var cm = 0; cm < _chatMessages[chatId].Count; cm++)
+                    if (_chatMessages.TryGetValue(chatId, out var chatMessages))
                     {
-                        try
+                        foreach (var progressiveMessage in chatMessages)
                         {
-                            var progressiveMessage = _chatMessages[chatId][cm];
-
-                            if (!progressiveMessage.HasCreated)
+                            try
                             {
-                                await SendCreateProgressiveMessage(chatId, progressiveMessage);
-                                createdMessagesCount++;
+                                if (!progressiveMessage.HasCreated)
+                                {
+                                    await SendCreateProgressiveMessage(chatId, progressiveMessage);
+                                    createdMessagesCount++;
+                                }
+                                else if (!progressiveMessage.HasUpdateNotified)
+                                {
+                                    await SendUpdateProgressiveMessage(chatId, progressiveMessage);
+                                    updatedMessagesCount++;
+                                }
                             }
-                            else if (!progressiveMessage.HasUpdateNotified)
+                            catch (Exception ex)
                             {
-                                await SendUpdateProgressiveMessage(chatId, progressiveMessage);
-                                updatedMessagesCount++;
+                                RemoveChatIfNeeded(ex, chatId);
+                                Logger.LogException(ex);
+                                failedMessagesCount++;
                             }
-                        }
-                        catch (Exception ex)
-                        {
-                            RemoveChatIfNeeded(ex, chatId);
-                            Logger.LogException(ex);
-                            failedMessagesCount++;
                         }
                     }
                 }
 
-                int chatsCount = _chatMessages.Count;
                 if(createdMessagesCount > 0) Logger.Log($"Created {createdMessagesCount} messages");
                 if(updatedMessagesCount > 0) Logger.Log($"Updated {updatedMessagesCount} messages");
                 if(failedMessagesCount > 0) Logger.Log($"Failed to update {failedMessagesCount} messages");
-                
-                
+
                 await Task.Delay(Config.Current.SendMessagesDelayMs);
             }
         }
