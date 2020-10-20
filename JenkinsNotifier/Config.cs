@@ -62,7 +62,9 @@ namespace JenkinsNotifier
 
         public static void PerformInitialSetup()
         {
-            Logger.Log("Config file is empty, fill it first!");
+            var fullPath = Path.GetFullPath(ConfigPath);
+            Logger.Log($"Fill config file at {fullPath}");
+            Utilities.OpenWithDefaultProgram(fullPath);
             Environment.Exit(0);
         }
 

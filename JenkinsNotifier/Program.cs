@@ -118,89 +118,114 @@ namespace JenkinsNotifier
         {
             while (_started)
             {
-                List<long> chatIds = _chatMessages.Keys.ToList();
-
-                foreach (var chatId in chatIds)
+                try
                 {
-                    for (var cm = 0; cm < _chatMessages[chatId].Count; cm++)
-                    {
-                        try
-                        {
-                            var progressiveMessage = _chatMessages[chatId][cm];
-                            if (progressiveMessage.Completed) continue;
-
-                            var build = await _jobsHandler.GetBuildDescription(progressiveMessage.JobName, progressiveMessage.BuildNumber);
-
-                            progressiveMessage.Update(build);
-                            switch (build.Building)
-                            {
-                                case false when progressiveMessage.Completed:
-                                    continue;
-                                case false when !progressiveMessage.Completed:
-                                    progressiveMessage.SetCompleted();
-                                    Logger.Log($"Build {progressiveMessage.ToBuildString()} has ended");
-                                    await _messageTimedSemaphore.Hit();
-                                    await SendUpdateProgressiveMessage(chatId, progressiveMessage);
-                                    break;
-                            }
-
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogException(ex);
-                        }
-                    }
+                    await UpdateJobs();
+                }
+                catch (Exception e)
+                {
+                    Logger.LogException(e);
                 }
 
-                SaveState();
                 await Task.Delay(Config.Current.CheckJobsDelayMs);
             }
         }
-        
+
+        private static async Task UpdateJobs()
+        {
+            List<long> chatIds = _chatMessages.Keys.ToList();
+
+            foreach (var chatId in chatIds)
+            {
+                for (var cm = 0; cm < _chatMessages[chatId].Count; cm++)
+                {
+                    try
+                    {
+                        var progressiveMessage = _chatMessages[chatId][cm];
+                        if (progressiveMessage.Completed) continue;
+
+                        var build = await _jobsHandler.GetBuildDescription(progressiveMessage.JobName,
+                            progressiveMessage.BuildNumber);
+
+                        progressiveMessage.Update(build);
+                        switch (build.Building)
+                        {
+                            case false when progressiveMessage.Completed:
+                                continue;
+                            case false when !progressiveMessage.Completed:
+                                progressiveMessage.SetCompleted();
+                                Logger.Log($"Build {progressiveMessage.ToBuildString()} has ended");
+                                await _messageTimedSemaphore.Hit();
+                                await SendUpdateProgressiveMessage(chatId, progressiveMessage);
+                                break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogException(ex);
+                    }
+                }
+            }
+
+            SaveState();
+        }
+
         private static async void SendMessagesLoop()
         {
             while (_started)
             {
-                List<long> chatIds = _chatMessages.Keys.ToList();
-
-                int createdMessagesCount = 0;
-                int updatedMessagesCount = 0;
-                int failedMessagesCount = 0;
-                foreach (var chatId in chatIds)
+                try
                 {
-                    if (_chatMessages.TryGetValue(chatId, out var chatMessages))
-                    {
-                        foreach (var progressiveMessage in chatMessages)
-                        {
-                            try
-                            {
-                                if (!progressiveMessage.HasCreated)
-                                {
-                                    await SendCreateProgressiveMessage(chatId, progressiveMessage);
-                                    createdMessagesCount++;
-                                }
-                                else if (!progressiveMessage.HasUpdateNotified)
-                                {
-                                    await SendUpdateProgressiveMessage(chatId, progressiveMessage);
-                                    updatedMessagesCount++;
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                RemoveChatIfNeeded(ex, chatId);
-                                Logger.LogException(ex);
-                                failedMessagesCount++;
-                            }
-                        }
-                    }
+                    await SendMessages();
                 }
-
-                if(createdMessagesCount > 0) Logger.Log($"Created {createdMessagesCount} messages");
-                if(updatedMessagesCount > 0) Logger.Log($"Updated {updatedMessagesCount} messages");
-                if(failedMessagesCount > 0) Logger.Log($"Failed to update {failedMessagesCount} messages");
+                catch (Exception e)
+                {
+                    Logger.LogException(e);
+                }
 
                 await Task.Delay(Config.Current.SendMessagesDelayMs);
             }
+        }
+
+        private static async Task SendMessages()
+        {
+            List<long> chatIds = _chatMessages.Keys.ToList();
+
+            int createdMessagesCount = 0;
+            int updatedMessagesCount = 0;
+            int failedMessagesCount = 0;
+            foreach (var chatId in chatIds)
+            {
+                if (_chatMessages.TryGetValue(chatId, out var chatMessages))
+                {
+                    foreach (var progressiveMessage in chatMessages)
+                    {
+                        try
+                        {
+                            if (!progressiveMessage.HasCreated)
+                            {
+                                await SendCreateProgressiveMessage(chatId, progressiveMessage);
+                                createdMessagesCount++;
+                            }
+                            else if (!progressiveMessage.HasUpdateNotified)
+                            {
+                                await SendUpdateProgressiveMessage(chatId, progressiveMessage);
+                                updatedMessagesCount++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            RemoveChatIfNeeded(ex, chatId);
+                            Logger.LogException(ex);
+                            failedMessagesCount++;
+                        }
+                    }
+                }
+            }
+
+            if (createdMessagesCount > 0) Logger.Log($"Created {createdMessagesCount} messages");
+            if (updatedMessagesCount > 0) Logger.Log($"Updated {updatedMessagesCount} messages");
+            if (failedMessagesCount > 0) Logger.Log($"Failed to update {failedMessagesCount} messages");
         }
 
         private static async Task SendUpdateProgressiveMessage(long chatId, ProgressiveChatMessage progressiveMessage)
