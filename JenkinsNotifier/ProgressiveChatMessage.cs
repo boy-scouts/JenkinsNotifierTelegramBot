@@ -86,10 +86,11 @@ namespace JenkinsNotifier
             var buildNumber = BuildNumber ?? -1;
             var timestamp = BuildTimeStamp ?? 0;
 
-            var buildUrl = Config.Current.JenkinsBaseUrl + $"job/{JobName}/{buildNumber}/";
-            var consoleOutputUrl = $"{buildUrl}consoleFull";
+            var jobUrl = Config.Current.JenkinsBaseUrl + $"job/{JobName}";
+            var buildUrl = $"{jobUrl}/{buildNumber}";
+            var consoleOutputUrl = $"{buildUrl}/consoleFull";
             
-            return $"[{buildUrl}](*{JobName} #{buildNumber}*)\n" +
+            return $"[*{JobName}*]({jobUrl}) (*#{buildNumber}*)[{buildUrl}]\n" +
                    $"Status: *{status}*\n" +
                    $"Build started at: *{timestamp.FromUnixTimestampMs().ToLocalTime():G}*\n" +
                    $"Duration: *~{GetDuration().ToHumanReadable()}*\n" +
@@ -97,7 +98,7 @@ namespace JenkinsNotifier
                    $"Progress: {progressBar}\n" +
                    (Completed ? $"Completed at: *{BuildCompletionTimeStamp.FromUnixTimestamp():G}*\n" : "\n") +
                    "\n" +
-                   $"[{consoleOutputUrl}](Logs)" +
+                   $"[Logs]({consoleOutputUrl})" +
                    $"_Updated at:_ {DateTime.Now:G}\n";
         }
 
