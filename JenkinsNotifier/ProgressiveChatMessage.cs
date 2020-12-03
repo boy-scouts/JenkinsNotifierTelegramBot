@@ -91,7 +91,7 @@ namespace JenkinsNotifier
             var consoleOutputUrl = $"{buildUrl}/consoleFull";
 
             var jobNameWUrl = $"[{JobName}]({jobUrl})";
-            var buildNumWithUrl = $"[{buildNumber}]({buildUrl})";
+            var buildNumWithUrl = $"[#{buildNumber}]({buildUrl})";
             
             return $"{jobNameWUrl} {buildNumWithUrl}\n" +
                    $"Status: *{status}*\n" +
