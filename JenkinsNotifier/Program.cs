@@ -81,9 +81,17 @@ namespace JenkinsNotifier
         {
             if (File.Exists(Config.Current.StateFile))
             {
-                _chatMessages =
-                    JsonConvert.DeserializeObject<Dictionary<long, List<ProgressiveChatMessage>>>(
-                        File.ReadAllText(Config.Current.StateFile));
+                try
+                {
+                    _chatMessages =
+                        JsonConvert.DeserializeObject<Dictionary<long, List<ProgressiveChatMessage>>>(
+                            File.ReadAllText(Config.Current.StateFile));
+                }
+                catch (Exception e)
+                {
+                    Logger.Log(e);
+                    File.Delete(Config.Current.StateFile);
+                }
             }
 
             foreach (var chatId in Config.Current.Chats)
